@@ -20,10 +20,10 @@ open Lake DSL
 -/
 
 require LPCore from git "https://github.com/kim-em/lp-core" @
-  "60fca2313ea3be14f578258dc6390f2fa07b26e7"
+  "98669eee0fe05bcc1ed9aa2c7c7adff5d1aaf9ae"
 
 require LPTactic from git "https://github.com/kim-em/lp-tactic" @
-  "eacb9b2270a9e9a810536f2c04e4f4ab7905dadf"
+  "3ab98a31eb89bc4eca00442cd58249490822ac3c"
 
 package LPBackendSoplexJSON
 
