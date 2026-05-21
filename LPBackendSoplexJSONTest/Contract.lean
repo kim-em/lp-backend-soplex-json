@@ -207,6 +207,18 @@ def case_decodeMalformedRationalRejected : IO Unit := do
   | .error _ => pure ()
   | other => throw (IO.userError s!"expected malformed-rational error, got: {repr other}")
 
+def case_decodeRejectsNonObjectCertificate : IO Unit := do
+  let resp := "{\"status\":\"optimal\",\"certificate\":[]}"
+  match decodeResponse 0 0 resp with
+  | .error _ => pure ()
+  | other => throw (IO.userError s!"expected error for non-object certificate, got: {repr other}")
+
+def case_decodeRejectsNonStringErrorEnvelope : IO Unit := do
+  let resp := "{\"error\":42}"
+  match decodeResponse 0 0 resp with
+  | .error _ => pure ()
+  | other => throw (IO.userError s!"expected error for non-string envelope, got: {repr other}")
+
 def case_decodeNonTerminalStatus : IO Unit := do
   let resp := "{\"status\":\"timeLimit\",\"certificate\":{\"primal\":null,\"dual\":null}}"
   match decodeResponse 0 0 resp with
@@ -247,6 +259,8 @@ def main : IO UInt32 := do
       ("decodeErrorEnvelope",            case_decodeErrorEnvelope),
       ("decodeLengthMismatchRejected",   case_decodeLengthMismatchRejected),
       ("decodeMalformedRationalRejected", case_decodeMalformedRationalRejected),
+      ("decodeRejectsNonObjectCertificate", case_decodeRejectsNonObjectCertificate),
+      ("decodeRejectsNonStringErrorEnvelope", case_decodeRejectsNonStringErrorEnvelope),
       ("decodeNonTerminalStatus",        case_decodeNonTerminalStatus) ]
   let mut failures := 0
   for (name, action) in cases do

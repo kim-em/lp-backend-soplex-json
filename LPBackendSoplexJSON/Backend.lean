@@ -50,14 +50,18 @@ def probe : IO (Except String Unit) := do
 /-- Run the SoPlex binary on a JSON-encoded `(opts, p)`, decode the
     response into a `Solution`.
 
-    Spawns `$LP_BACKEND_SOPLEX_JSON_BIN` (or `soplex` on `$PATH`) with
-    `--solve --json`, writes the encoded request to stdin, reads the
-    response from stdout. The wire-format `{ "error": ... }` envelope,
-    a non-zero exit code, or a JSON-parse failure all surface through
-    `SolveError.bridge` with an actionable diagnostic. -/
-def solveExact {m n : Nat} (opts : Options) (p : Problem m n) :
+    Spawns `bin` with `--solve --json`, writes the encoded request to
+    stdin, reads the response from stdout. The wire-format
+    `{ "error": ... }` envelope, a non-zero exit code, or a JSON-parse
+    failure all surface through `SolveError.bridge` with an actionable
+    diagnostic.
+
+    The error envelope on stdout takes precedence over a non-zero exit
+    code: a binary that crashes after writing `{ "error": ... }` still
+    surfaces its diagnostic instead of a generic "exited with code N"
+    message. -/
+def solveExactWith (bin : String) {m n : Nat} (opts : Options) (p : Problem m n) :
     IO (Except SolveError (Solution m n)) := do
-  let bin ← soplexBinary
   let request := encodeRequest opts p
   let out ← try
     IO.Process.output
@@ -70,11 +74,24 @@ def solveExact {m n : Nat} (opts : Options) (p : Problem m n) :
     return .error <| SolveError.bridge
       s!"soplex-json: could not spawn `{bin} --solve --json`: {e.toString} \
          (override with the `LP_BACKEND_SOPLEX_JSON_BIN` env var)"
+  -- Look for the documented error envelope on stdout first, regardless
+  -- of exit code: a binary that crashes after writing diagnostics
+  -- should still surface them.
+  let decoded := decodeResponse m n out.stdout
   if out.exitCode ≠ 0 then
-    return .error <| SolveError.bridge
-      s!"soplex-json: `{bin} --solve --json` exited with code {out.exitCode}: \
-         {out.stderr.trimAscii}"
-  match decodeResponse m n out.stdout with
+    match decoded with
+    | .ok (.wireError msg) =>
+      return .error <| SolveError.bridge s!"soplex-json: {msg}"
+    | _ =>
+      let stderrTail := out.stderr.trimAscii
+      let stdoutHead :=
+        let trimmed := out.stdout.trimAscii.copy
+        if trimmed.utf8ByteSize ≤ 256 then trimmed
+        else (trimmed.take 256).copy ++ "…"
+      return .error <| SolveError.bridge
+        s!"soplex-json: `{bin} --solve --json` exited with code \
+           {out.exitCode}: stderr={stderrTail}; stdout={stdoutHead}"
+  match decoded with
   | .error msg =>
     return .error <| SolveError.bridge
       s!"soplex-json: malformed response from `{bin}`: {msg}"
@@ -82,6 +99,14 @@ def solveExact {m n : Nat} (opts : Options) (p : Problem m n) :
     return .error <| SolveError.bridge s!"soplex-json: {msg}"
   | .ok (.solution sol) =>
     return .ok sol
+
+/-- The registry-facing entry point: resolves the binary from
+    `LP_BACKEND_SOPLEX_JSON_BIN` (or `soplex` on `$PATH`) and defers
+    to `solveExactWith`. Tests that need to spawn a fake binary can
+    call `solveExactWith` directly. -/
+def solveExact {m n : Nat} (opts : Options) (p : Problem m n) :
+    IO (Except SolveError (Solution m n)) := do
+  solveExactWith (← soplexBinary) opts p
 
 /-- The `LPBackend` value registered with the tactic registry. -/
 def backend : LPBackend where

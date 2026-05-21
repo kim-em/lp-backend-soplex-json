@@ -229,16 +229,23 @@ inductive Decoded (m n : Nat)
 def decodeResponse (m n : Nat) (s : String) :
     Except String (Decoded m n) := do
   let j ← Json.parse s
-  -- Error envelope short-circuits everything else.
+  -- Error envelope short-circuits everything else. The spec defines
+  -- `error` as a human-readable string; an `error` field with another
+  -- shape is a protocol bug, not a recoverable wire error.
   match j.getObjVal? "error" with
   | .ok eJ =>
     match eJ.getStr? with
     | .ok msg => return .wireError msg
-    | .error _ => return .wireError (toString eJ)
+    | .error _ =>
+      throw s!"error envelope value is not a string: {eJ.compress}"
   | .error _ => pure ()
   let statusStr ← j.getObjVal? "status" >>= Json.getStr?
   let status ← statusFromWire statusStr
+  -- `certificate` itself must be a JSON object; only its `primal` and
+  -- `dual` fields are independently optional. A non-object certificate
+  -- is malformed wire data, not a missing-field-is-unchecked case.
   let certJ ← j.getObjVal? "certificate"
+  let _ ← certJ.getObj? -- reject arrays, strings, etc.
   let primalJ := certJ.getObjValD "primal"
   let dualJ   := certJ.getObjValD "dual"
   -- `unbounded` puts the ray of recession in the wire's `primal` slot;
