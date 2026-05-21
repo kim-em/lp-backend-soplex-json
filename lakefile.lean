@@ -32,3 +32,18 @@ lean_lib LPBackendSoplexJSON where
   roots := #[`LPBackendSoplexJSON]
   globs := #[`LPBackendSoplexJSON, `LPBackendSoplexJSON.Contract,
              `LPBackendSoplexJSON.Backend]
+
+/-- Behavioral tests for the JSON encoder/decoder. Round-trips
+    hand-crafted `Problem`s and `Solution`s through the wire format
+    without any native solver involvement, so this runs in any CI
+    matrix entry (no `brew install soplex` needed). -/
+lean_lib LPBackendSoplexJSONTest where
+  roots := #[`LPBackendSoplexJSONTest.Contract, `LPBackendSoplexJSONTest.Runner]
+
+lean_exe «contract-tests» where
+  root := `LPBackendSoplexJSONTest.Contract
+
+/-- `lake test` entry point. -/
+@[test_driver]
+lean_exe «test-runner» where
+  root := `LPBackendSoplexJSONTest.Runner

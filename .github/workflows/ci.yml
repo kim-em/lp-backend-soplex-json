@@ -25,3 +25,8 @@ jobs:
       # or SoPlex we want to know.
       - run: lean --version
       - run: lake build
+      # Encoder/decoder round-trip tests. No `soplex` binary required;
+      # an integration test that actually spawns one would need an
+      # extra matrix entry that `apt install soplex` / `brew install
+      # soplex` first.
+      - run: lake test

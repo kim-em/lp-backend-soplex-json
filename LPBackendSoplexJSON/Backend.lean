@@ -12,13 +12,6 @@
   imported, the FFI is preferred by `dispatchSolveExact` because it
   has lower priority. With only this one imported, this becomes the
   default.
-
-  The current implementation ships a working `probe` and a placeholder
-  `solveExact` that returns a structured error. The wire-format
-  encoder/decoder lives in `Contract.lean` and a follow-up will
-  connect them. Importing this module is already useful today: it
-  registers the backend so `availableBackends` lists it, and
-  `set_option lp.backend "soplex-json"` switches dispatch to it.
 -/
 
 import LPCore
@@ -57,17 +50,38 @@ def probe : IO (Except String Unit) := do
 /-- Run the SoPlex binary on a JSON-encoded `(opts, p)`, decode the
     response into a `Solution`.
 
-    TODO: the encoder/decoder still need to land; see
-    `Contract.lean` for the wire shape and `docs/json-contract.md`
-    for the full spec. Until then the backend self-registers (so
-    `availableBackends` lists it) but reports a structured "not yet
-    wired" error from `solveExact`. -/
-def solveExact {m n : Nat} (_opts : Options) (_p : Problem m n) :
+    Spawns `$LP_BACKEND_SOPLEX_JSON_BIN` (or `soplex` on `$PATH`) with
+    `--solve --json`, writes the encoded request to stdin, reads the
+    response from stdout. The wire-format `{ "error": ... }` envelope,
+    a non-zero exit code, or a JSON-parse failure all surface through
+    `SolveError.bridge` with an actionable diagnostic. -/
+def solveExact {m n : Nat} (opts : Options) (p : Problem m n) :
     IO (Except SolveError (Solution m n)) := do
-  return Except.error
-    (SolveError.bridge
-      "soplex-json backend: JSON encoder/decoder not yet implemented; \
-       see kim-em/lp-backend-soplex-json `docs/json-contract.md`")
+  let bin ← soplexBinary
+  let request := encodeRequest opts p
+  let out ← try
+    IO.Process.output
+      { cmd    := bin,
+        args   := #["--solve", "--json"],
+        stdin  := .piped,
+        stdout := .piped,
+        stderr := .piped } request
+  catch e =>
+    return .error <| SolveError.bridge
+      s!"soplex-json: could not spawn `{bin} --solve --json`: {e.toString} \
+         (override with the `LP_BACKEND_SOPLEX_JSON_BIN` env var)"
+  if out.exitCode ≠ 0 then
+    return .error <| SolveError.bridge
+      s!"soplex-json: `{bin} --solve --json` exited with code {out.exitCode}: \
+         {out.stderr.trimAscii}"
+  match decodeResponse m n out.stdout with
+  | .error msg =>
+    return .error <| SolveError.bridge
+      s!"soplex-json: malformed response from `{bin}`: {msg}"
+  | .ok (.wireError msg) =>
+    return .error <| SolveError.bridge s!"soplex-json: {msg}"
+  | .ok (.solution sol) =>
+    return .ok sol
 
 /-- The `LPBackend` value registered with the tactic registry. -/
 def backend : LPBackend where
