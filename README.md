@@ -1,13 +1,17 @@
 # LPBackendSoplexJSON
 
 [![Lean](https://img.shields.io/badge/Lean-4.29.1-blue.svg)](./lean-toolchain)
-[![License](https://img.shields.io/github/license/kim-em/lp-backend-soplex-json.svg)](./LICENSE)
+[![License](https://img.shields.io/github/license/leanprover/lp-backend-soplex-json.svg)](./LICENSE)
+
+> **New here? Start at [`leanprover/lp`](https://github.com/leanprover/lp)** — the entry
+> point for the `lp` / `maximize` tactics and the verified LP solver. This repository is one
+> package of that family: the out-of-process SoPlex JSON backend adapter (scaffold).
 
 Out-of-process `LPBackend` adapter for the `by lp` tactic registry.
 Drives an external `soplex` binary on `$PATH` (or anywhere on disk
 via `LP_BACKEND_SOPLEX_JSON_BIN`) through a JSON stdio protocol,
 and self-registers with the
-[`kim-em/lp-tactic`](https://github.com/kim-em/lp-tactic) registry
+[`leanprover/lp-tactic`](https://github.com/leanprover/lp-tactic) registry
 under priority 50 ("subprocess band") on import.
 
 This is the "I already have SoPlex installed, please don't rebuild
@@ -15,7 +19,7 @@ it" backend. The build graph carries *no* native deps — no GMP, no
 Boost, no SoPlex headers. SoPlex enters the picture at *runtime*,
 when `solveExact` is called and the backend spawns the binary. If
 you'd rather pin a specific SoPlex build inside Lake, depend on
-[`kim-em/lp-backend-soplex-ffi`](https://github.com/kim-em/lp-backend-soplex-ffi)
+[`leanprover/lp-backend-soplex-ffi`](https://github.com/leanprover/lp-backend-soplex-ffi)
 instead.
 
 The wire format ([`docs/json-contract.md`](./docs/json-contract.md))
@@ -29,7 +33,7 @@ lands, etc.) can serve as a drop-in backend by editing the
 
 ```lean
 require LPBackendSoplexJSON from git
-  "https://github.com/kim-em/lp-backend-soplex-json" @ "main"
+  "https://github.com/leanprover/lp-backend-soplex-json" @ "main"
 ```
 
 ```lean
@@ -71,9 +75,9 @@ LPBackendSoplexJSON/
 docs/json-contract.md            # the wire-format spec
 ```
 
-The backend lives under `namespace Soplex.Backend.SoplexJSON`,
+The backend lives under `namespace LP.Backend.SoplexJSON`,
 mirroring the layout of
-[`kim-em/lp-backend-soplex-ffi`](https://github.com/kim-em/lp-backend-soplex-ffi).
+[`leanprover/lp-backend-soplex-ffi`](https://github.com/leanprover/lp-backend-soplex-ffi).
 
 ## Licence
 

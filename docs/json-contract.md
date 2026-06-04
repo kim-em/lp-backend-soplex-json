@@ -111,6 +111,6 @@ This document describes wire version `1`. A future incompatible
 change would require a version tag in the request and a versioned
 response.
 
-For now, this `kim-em/lp-backend-soplex-json` repository is the
+For now, this `leanprover/lp-backend-soplex-json` repository is the
 canonical spec — any third-party implementation should cite a
 specific commit of this file.

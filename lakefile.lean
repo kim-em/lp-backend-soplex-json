@@ -19,11 +19,11 @@ open Lake DSL
   HiGHS, a Rust shim, etc.) can serve as a drop-in backend.
 -/
 
-require LPCore from git "https://github.com/kim-em/lp-core" @
-  "66ac782a11ba2f8c2d3b4ad446000cf20b3f39b7"
+require LPCore from git "https://github.com/leanprover/lp-core" @
+  "70ca150585f8439a830374b5bec602d391addbc9"
 
-require LPTactic from git "https://github.com/kim-em/lp-tactic" @
-  "809fd8a09506213e50b6198dd6261166f4d78b54"
+require LPTactic from git "https://github.com/leanprover/lp-tactic" @
+  "3f1309f8f3cda3c1f67a0af70eb68eb5836f38fa"
 
 package LPBackendSoplexJSON
 

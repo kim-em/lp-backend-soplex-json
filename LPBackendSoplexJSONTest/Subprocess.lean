@@ -20,8 +20,8 @@ import LPCore
 import LPBackendSoplexJSON.Backend
 import LPBackendSoplexJSON.Contract
 
-open Soplex
-open Soplex.Backend.SoplexJSON
+open LP
+open LP.Backend.SoplexJSON
 
 namespace LPBackendSoplexJSONTest.Subprocess
 

@@ -18,9 +18,9 @@ import LPCore
 import LPTactic.Registry
 import LPBackendSoplexJSON.Contract
 
-namespace Soplex.Backend.SoplexJSON
+namespace LP.Backend.SoplexJSON
 
-open Soplex Soplex.LP
+open LP
 
 /-- Resolve the SoPlex binary location. Honors
     `LP_BACKEND_SOPLEX_JSON_BIN` so users on a non-standard layout
@@ -117,4 +117,4 @@ def backend : LPBackend where
 
 initialize registerBackend backend
 
-end Soplex.Backend.SoplexJSON
+end LP.Backend.SoplexJSON

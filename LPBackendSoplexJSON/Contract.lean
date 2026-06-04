@@ -41,10 +41,10 @@
 import Lean.Data.Json
 import LPCore.Types
 
-namespace Soplex.Backend.SoplexJSON
+namespace LP.Backend.SoplexJSON
 
 open Lean (Json)
-open Soplex
+open LP
 
 /-! ## Rational ↔ decimal string
 
@@ -269,4 +269,4 @@ def decodeResponse (m n : Nat) (s : String) :
     { status := status, objective := none, certificate := cert, log := "" }
   pure (.solution sol)
 
-end Soplex.Backend.SoplexJSON
+end LP.Backend.SoplexJSON

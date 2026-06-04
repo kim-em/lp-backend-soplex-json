@@ -1,5 +1,5 @@
 /-
-  `lake test` entry point for `kim-em/lp-backend-soplex-json`.
+  `lake test` entry point for `leanprover/lp-backend-soplex-json`.
   Runs every test suite in the package.
 -/
 
