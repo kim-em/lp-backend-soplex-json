@@ -38,8 +38,14 @@
   Lean side).
 -/
 
-import Lean.Data.Json
-import LPCore.Types
+module
+
+public import Lean.Data.Json
+public import LPCore.Types
+
+-- A plain `public section` (no `@[expose]`): the encoder/decoder are
+-- run, not definitionally unfolded, and their helpers stay `private`.
+public section
 
 namespace LP.Backend.SoplexJSON
 

@@ -4,5 +4,8 @@
   Self-registers the JSON subprocess backend with the `lp-tactic`
   registry on import.
 -/
+module
 
-import LPBackendSoplexJSON.Backend
+public import LPBackendSoplexJSON.Backend
+
+@[expose] public section

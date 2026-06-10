@@ -14,9 +14,13 @@
   default.
 -/
 
-import LPCore
-import LPTactic.Registry
-import LPBackendSoplexJSON.Contract
+module
+
+public import LPCore
+public import LPTactic.Registry
+public import LPBackendSoplexJSON.Contract
+
+@[expose] public section
 
 namespace LP.Backend.SoplexJSON
 
