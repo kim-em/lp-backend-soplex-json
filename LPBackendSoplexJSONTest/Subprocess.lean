@@ -77,11 +77,14 @@ private def shimScript (stdoutBody : String) (exitCode : Nat := 0)
 private def captureShim (capturePath : String) (stdoutBody : String) : String :=
   s!"#!/bin/sh\ncat > '{capturePath}'\nprintf '%s' '{stdoutBody}'\nexit 0\n"
 
+/-- A 1×1 optimal response in the four-vector dual form. -/
+private def optimalBody (primal : String) : String :=
+  "{\"status\":\"optimal\",\"certificate\":{\"primal\":[\"" ++ primal ++ "\"],\"ray\":null,\"dual\":" ++
+  "{\"rowLower\":[\"0\"],\"rowUpper\":[\"0\"],\"colLower\":[\"0\"],\"colUpper\":[\"0\"]}}}"
+
 def case_happyPath : IO Unit := withTempDir fun dir => do
   let bin := (dir / "fake-soplex").toString
-  let body :=
-    "{\"status\":\"optimal\",\"certificate\":" ++
-    "{\"primal\":[\"3\"],\"dual\":[\"0\"]}}"
+  let body := optimalBody "3"
   writeExecutable ⟨bin⟩ (shimScript body)
   match (← solveExactWith bin (m := 1) (n := 1) {} tinyProblem) with
   | .ok sol =>
@@ -96,9 +99,7 @@ def case_happyPath : IO Unit := withTempDir fun dir => do
 def case_stdinReceivesEncodedRequest : IO Unit := withTempDir fun dir => do
   let captured := (dir / "captured.json").toString
   let bin      := (dir / "fake-soplex").toString
-  let body :=
-    "{\"status\":\"optimal\",\"certificate\":" ++
-    "{\"primal\":[\"0\"],\"dual\":[\"0\"]}}"
+  let body := optimalBody "0"
   writeExecutable ⟨bin⟩ (captureShim captured body)
   let _ ← solveExactWith bin (m := 1) (n := 1) {} tinyProblem
   let onWire ← IO.FS.readFile captured
@@ -159,6 +160,28 @@ def case_errorEnvelopeOnZeroExit : IO Unit := withTempDir fun dir => do
       s!"missing envelope diag in: {msg}"
   | other => throw (IO.userError s!"expected bridge error, got: {repr other}")
 
+/-- `probeWith` accepts a contract-speaking binary (any decodable
+    response counts)... -/
+def case_probeAcceptsContractSpeaker : IO Unit := withTempDir fun dir => do
+  let bin := (dir / "fake-soplex").toString
+  -- The probe problem is 0×1; answer it with a decodable response.
+  let body :=
+    "{\"status\":\"optimal\",\"certificate\":{\"primal\":[\"0\"],\"ray\":null,\"dual\":" ++
+    "{\"rowLower\":[],\"rowUpper\":[],\"colLower\":[\"1\"],\"colUpper\":[\"0\"]}}}"
+  writeExecutable ⟨bin⟩ (shimScript body)
+  match ← probeWith bin with
+  | .ok () => pure ()
+  | .error e => throw (IO.userError s!"probe rejected contract speaker: {e}")
+
+/-- ...and rejects a binary that answers with non-contract output,
+    the way a stock `soplex` CLI would. -/
+def case_probeRejectsNonContractBinary : IO Unit := withTempDir fun dir => do
+  let bin := (dir / "fake-soplex").toString
+  writeExecutable ⟨bin⟩ (shimScript "SoPlex usage: soplex [options] <lpfile>" 1)
+  match ← probeWith bin with
+  | .error _ => pure ()
+  | .ok () => throw (IO.userError "probe accepted a non-contract binary")
+
 def main : IO UInt32 := do
   if System.Platform.isWindows then
     IO.println "  [subprocess] skipped on Windows (uses sh/chmod)"
@@ -170,7 +193,9 @@ def main : IO UInt32 := do
       ("errorEnvelopeWinsOverNonZeroExit", case_errorEnvelopeWinsOverNonZeroExit),
       ("malformedJsonSurfaces",         case_malformedJsonSurfaces),
       ("spawnFailureIsActionable",      case_spawnFailureIsActionable),
-      ("errorEnvelopeOnZeroExit",       case_errorEnvelopeOnZeroExit) ]
+      ("errorEnvelopeOnZeroExit",       case_errorEnvelopeOnZeroExit),
+      ("probeAcceptsContractSpeaker",   case_probeAcceptsContractSpeaker),
+      ("probeRejectsNonContractBinary", case_probeRejectsNonContractBinary) ]
   let mut failures := 0
   for (name, action) in cases do
     IO.print s!"  [subprocess] {name} ... "
