@@ -1,11 +1,11 @@
 # LPBackendSoplexJSON
 
-[![Lean](https://img.shields.io/badge/Lean-4.29.1-blue.svg)](./lean-toolchain)
+[![Lean](https://img.shields.io/badge/Lean-4.31.0--rc1-blue.svg)](./lean-toolchain)
 [![License](https://img.shields.io/github/license/leanprover/lp-backend-soplex-json.svg)](./LICENSE)
 
 > **New here? Start at [`leanprover/lp`](https://github.com/leanprover/lp)** — the entry
 > point for the `lp` / `maximize` tactics and the verified LP solver. This repository is one
-> package of that family: the out-of-process SoPlex JSON backend adapter (scaffold).
+> package of that family: the out-of-process JSON backend (experimental).
 
 Out-of-process `LPBackend` adapter for the `by lp` tactic registry.
 Drives an external `soplex` binary on `$PATH` (or anywhere on disk
@@ -40,30 +40,40 @@ require LPBackendSoplexJSON from git
 import LPTactic
 import LPBackendSoplexJSON  -- registers "soplex-json" at priority 50
 
--- With `brew install soplex` (or the equivalent), `by lp` now
--- dispatches to the out-of-process backend by default:
+-- With LP_BACKEND_SOPLEX_JSON_BIN pointing at a binary that speaks
+-- the JSON contract, `by lp` dispatches to it:
 example (a b : Rat) (_ : 2 * a + b ≤ 5) (_ : a - b ≤ 1) :
     3 * a ≤ 6 := by lp
 ```
 
-Override the binary location explicitly:
+Point the backend at the JSON-speaking binary:
 
 ```sh
-export LP_BACKEND_SOPLEX_JSON_BIN=/opt/scip-suite/bin/soplex
+export LP_BACKEND_SOPLEX_JSON_BIN=/path/to/soplex-json-wrapper
 ```
+
+**A stock `soplex` binary (e.g. from `brew install soplex`) is not
+sufficient**: the backend invokes the binary as
+`<bin> --solve --json` and exchanges the JSON wire format on
+stdin/stdout, which the upstream SoPlex CLI does not implement. You
+need a wrapper that speaks the contract — that is the point of this
+package: any external tool that does (a Python harness driving
+HiGHS, a Rust shim around SoPlex, …) becomes a drop-in `by lp`
+backend.
 
 ## Status
 
-Today the backend ships a working `probe` (spawns
-`soplex --version`, captures exit code) and a placeholder
-`solveExact` that reports a structured "JSON encoder/decoder not
-yet implemented" error. The wire-format spec in
-[`docs/json-contract.md`](./docs/json-contract.md) is canonical;
-the encoder/decoder connecting it to `Backend.lean`'s
-`solveExact` is the follow-up work. Importing the module today is
-already meaningful: it registers the backend so
-`availableBackends` lists it, and the probe correctly reports
-"is `soplex` installed?" diagnostics.
+Experimental. The Lean side is implemented and tested: the encoder /
+decoder for the wire format in
+[`docs/json-contract.md`](./docs/json-contract.md) live in
+`Contract.lean` (round-trip tests in
+`LPBackendSoplexJSONTest/Contract.lean`), and `solveExact` spawns the
+binary, writes the request, and decodes the response (subprocess
+behavioral tests in `LPBackendSoplexJSONTest/Subprocess.lean`, using a
+stub binary — no SoPlex install needed in CI). What does not exist
+yet is a published JSON-speaking solver wrapper; until one ships,
+registering the package gets you the registry slot, the probe
+diagnostics, and a backend that works against your own wrapper.
 
 ## Layout
 
@@ -71,7 +81,8 @@ already meaningful: it registers the backend so
 LPBackendSoplexJSON.lean         # top-level import
 LPBackendSoplexJSON/
   Backend.lean                   # def backend : LPBackend, probe, solveExact
-  Contract.lean                  # JSON encoder/decoder (TODO)
+  Contract.lean                  # JSON encoder/decoder
+LPBackendSoplexJSONTest/         # `lake test` suites (contract + subprocess)
 docs/json-contract.md            # the wire-format spec
 ```
 
