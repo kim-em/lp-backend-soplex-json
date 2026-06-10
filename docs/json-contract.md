@@ -16,6 +16,10 @@ $LP_BACKEND_SOPLEX_JSON_BIN [--solve --json]
 
 (falling back to `soplex` on `$PATH` if the env var is unset), then
 writes the request to stdin and reads the response from stdout.
+The registry probe uses the same path: it sends the trivial request
+`minimize x, x ≥ 0` (one variable, no rows) and requires a decodable
+response, so a binary that does not speak this contract is reported
+as unavailable before any real solve is attempted.
 
 Stderr is captured and surfaced through `SolveError.bridge` on
 non-zero exit. The Lean side closes stdin after writing the
@@ -74,18 +78,37 @@ parses the string back into a `Rat` exactly.
   "status": "optimal" | "infeasible" | "unbounded"
           | "iterLimit" | "timeLimit" | "numericFailure" | "aborted",
   "certificate": {
-    "primal": ["<Rat>", ...] | null,   // length = numVars when present
-    "dual":   ["<Rat>", ...] | null    // length = numConstraints when present
+    "primal": ["<Rat>", ...] | null,   // feasible point; length = numVars
+    "ray":    ["<Rat>", ...] | null,   // recession direction; length = numVars
+    "dual": {
+      "rowLower": ["<Rat>", ...],      // length = numConstraints
+      "rowUpper": ["<Rat>", ...],      // length = numConstraints
+      "colLower": ["<Rat>", ...],      // length = numVars
+      "colUpper": ["<Rat>", ...]       // length = numVars
+    } | null
   }
 }
 ```
 
+The certificate mirrors the verifier's `LPCore.Certificate` /
+`LP.DualBundle` shape exactly, so everything the pure-Lean checker
+can verify is expressible on the wire.
+
+- `dual` is the canonical lower/upper split: all four vectors are
+  nonnegative, with a coordinate zero whenever the matching bound is
+  absent (`null` in the request). For an optimality certificate it
+  must satisfy stationarity `Aᵀ(rowLower − rowUpper) + (colLower −
+  colUpper) = c`; for a Farkas (infeasibility) certificate, the same
+  with `= 0` and a strictly positive bound combination. The Lean
+  verifier checks all of this; the wire layer only checks shape.
 - Terminal statuses (`optimal`, `infeasible`, `unbounded`) MUST
-  carry the certificate field appropriate to that status:
-  - `optimal`     → both `primal` and `dual`
-  - `infeasible`  → `dual` only (Farkas certificate)
-  - `unbounded`   → `primal` only (ray of recession)
-  Missing-field-for-terminal-status surfaces in the verifier as
+  carry the certificate fields appropriate to that status:
+  - `optimal`     → `primal` and `dual`
+  - `infeasible`  → `dual` (Farkas certificate)
+  - `unbounded`   → `primal` (a *feasible base point*) and `ray`
+    (the improving recession direction) — both are required; the
+    verifier cannot certify unboundedness from a ray alone.
+  A missing field for a terminal status surfaces in the verifier as
   `.unchecked status` (not an error — the LP just didn't get
   proven).
 - Non-terminal statuses pass through to the verifier as

@@ -34,23 +34,6 @@ def soplexBinary : IO String := do
   | some path => return path
   | none      => return "soplex"
 
-/-- Spawn `soplex --version`, capture the exit code. Returns `.ok ()`
-    on success; on failure, a structured error naming the binary
-    that was tried so the diagnostic is actionable. -/
-def probe : IO (Except String Unit) := do
-  let bin ← soplexBinary
-  try
-    let out ← IO.Process.output { cmd := bin, args := #["--version"] }
-    if out.exitCode = 0 then
-      return .ok ()
-    else
-      return .error
-        s!"`{bin} --version` exited with code {out.exitCode}: {out.stderr.trimAscii}"
-  catch e =>
-    return .error
-      s!"could not spawn `{bin} --version`: {e.toString} \
-         (override with the `LP_BACKEND_SOPLEX_JSON_BIN` env var)"
-
 /-- Run the SoPlex binary on a JSON-encoded `(opts, p)`, decode the
     response into a `Solution`.
 
@@ -111,6 +94,23 @@ def solveExactWith (bin : String) {m n : Nat} (opts : Options) (p : Problem m n)
 def solveExact {m n : Nat} (opts : Options) (p : Problem m n) :
     IO (Except SolveError (Solution m n)) := do
   solveExactWith (← soplexBinary) opts p
+
+/-- Probe `bin` end-to-end: send the trivial LP `minimize x, x ≥ 0`
+    through `--solve --json` and require a decodable response (any
+    status). A stock `soplex` binary fails here — it does not speak
+    the JSON contract — which is exactly the diagnostic the registry
+    should surface. Blocking semantics match the solve itself. -/
+def probeWith (bin : String) : IO (Except String Unit) := do
+  let probeProblem : Problem 0 1 :=
+    { c := #v[1], a := #[], rowBounds := #v[], colBounds := #v[(some 0, none)] }
+  match ← solveExactWith bin {} probeProblem with
+  | .ok _ => return .ok ()
+  | .error (.bridge msg) => return .error msg
+  | .error e => return .error s!"probe solve failed: {repr e}"
+
+/-- Registry-facing probe: `probeWith` against the resolved binary. -/
+def probe : IO (Except String Unit) := do
+  probeWith (← soplexBinary)
 
 /-- The `LPBackend` value registered with the tactic registry. -/
 def backend : LPBackend where

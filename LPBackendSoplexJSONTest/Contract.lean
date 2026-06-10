@@ -11,14 +11,16 @@
       have to round-trip through anyway;
     * `null` bounds (±∞) survive the trip;
     * the `{ "error": ... }` envelope decodes into `Decoded.wireError`;
-    * the `unbounded` status maps the wire's `primal` into
-      `Certificate.ray`;
-    * length mismatches surface as decode errors rather than
-      silently truncating.
+    * the certificate slots mirror `LPCore.Certificate` (`primal`,
+      `ray`, and the four-vector `dual` bundle), and a decoded
+      unbounded certificate round-trips through `verifyOutcome`;
+    * length mismatches and missing dual fields surface as decode
+      errors rather than silently truncating.
 -/
 
 import Lean.Data.Json
 import LPCore
+import LPVerify
 import LPBackendSoplexJSON.Contract
 
 open Lean (Json)
@@ -130,7 +132,8 @@ def case_sparseEntriesAreTriples : IO Unit := do
 /-! ## Response decoding -/
 
 def case_decodeOptimal : IO Unit := do
-  let resp := "{\"status\":\"optimal\",\"certificate\":{\"primal\":[\"1\",\"-1/2\",\"3/7\"],\"dual\":[\"0\",\"2\"]}}"
+  let resp := "{\"status\":\"optimal\",\"certificate\":{\"primal\":[\"1\",\"-1/2\",\"3/7\"],\"ray\":null,\"dual\":" ++
+    "{\"rowLower\":[\"0\",\"2\"],\"rowUpper\":[\"0\",\"0\"],\"colLower\":[\"0\",\"0\",\"0\"],\"colUpper\":[\"0\",\"1/3\",\"0\"]}}}"
   match decodeResponse 2 3 resp with
   | .error e => throw (IO.userError s!"decode failed: {e}")
   | .ok (.wireError msg) => throw (IO.userError s!"unexpected wireError: {msg}")
@@ -143,40 +146,64 @@ def case_decodeOptimal : IO Unit := do
     assertM (primal[0] = 1) s!"primal[0] = {primal[0]}"
     assertM (primal[1] = mkRat (-1) 2) s!"primal[1] = {primal[1]}"
     assertM (primal[2] = mkRat 3 7) s!"primal[2] = {primal[2]}"
-    -- Dual is split signed → positive/negative; both rows are nonneg.
+    assertM sol.certificate.ray.isNone "ray should be none for optimal"
     let some dual := sol.certificate.dual
       | throw (IO.userError "missing dual")
-    assertM (dual.rowLower[0] = 0) "dual rowLower[0]"
     assertM (dual.rowLower[1] = 2) s!"dual rowLower[1] = {dual.rowLower[1]}"
     assertM (dual.rowUpper[0] = 0) "dual rowUpper[0]"
-    assertM (dual.rowUpper[1] = 0) "dual rowUpper[1]"
+    assertM (dual.colUpper[1] = mkRat 1 3) s!"dual colUpper[1] = {dual.colUpper[1]}"
+    assertM (dual.colLower[2] = 0) "dual colLower[2]"
 
-def case_decodeSignedDualSplit : IO Unit := do
+def case_decodeDualMissingFieldRejected : IO Unit := do
+  -- All four dual vectors are required when `dual` is present.
+  let resp := "{\"status\":\"optimal\",\"certificate\":{\"primal\":[\"0\"],\"dual\":" ++
+    "{\"rowLower\":[\"0\"],\"rowUpper\":[\"0\"],\"colLower\":[\"0\"]}}}"
+  match decodeResponse 1 1 resp with
+  | .error _ => pure ()
+  | other => throw (IO.userError s!"expected missing-field error, got: {repr other}")
+
+def case_decodeDualArrayFormRejected : IO Unit := do
+  -- The pre-release single-array dual form is no longer accepted.
   let resp := "{\"status\":\"optimal\",\"certificate\":{\"primal\":[\"0\"],\"dual\":[\"-3/4\"]}}"
   match decodeResponse 1 1 resp with
-  | .ok (.solution sol) =>
-    let some dual := sol.certificate.dual
-      | throw (IO.userError "missing dual")
-    assertM (dual.rowLower[0] = 0) s!"rowLower[0] = {dual.rowLower[0]}"
-    assertM (dual.rowUpper[0] = mkRat 3 4) s!"rowUpper[0] = {dual.rowUpper[0]}"
-  | other => throw (IO.userError s!"decode: {repr other}")
+  | .error _ => pure ()
+  | other => throw (IO.userError s!"expected rejection of array dual, got: {repr other}")
 
-def case_decodeUnboundedRoutesPrimalToRay : IO Unit := do
-  let resp := "{\"status\":\"unbounded\",\"certificate\":{\"primal\":[\"1\",\"0\",\"0\"],\"dual\":null}}"
+def case_decodeUnboundedCarriesBaseAndRay : IO Unit := do
+  let resp := "{\"status\":\"unbounded\",\"certificate\":{\"primal\":[\"0\",\"0\",\"0\"],\"ray\":[\"1\",\"0\",\"0\"],\"dual\":null}}"
   match decodeResponse 2 3 resp with
   | .ok (.solution sol) =>
     match sol.status with
     | .unbounded => pure ()
     | other => throw (IO.userError s!"status: {repr other}")
-    assertM sol.certificate.primal.isNone "primal should be none for unbounded"
+    let some primal := sol.certificate.primal
+      | throw (IO.userError "primal (base point) should be set for unbounded")
+    assertM (primal[0] = 0) s!"primal[0] = {primal[0]}"
     let some ray := sol.certificate.ray
       | throw (IO.userError "ray should be set for unbounded")
     assertM (ray[0] = 1) s!"ray[0] = {ray[0]}"
     assertM sol.certificate.dual.isNone "dual should be none"
   | other => throw (IO.userError s!"decode: {repr other}")
 
+/-- The wire fixture for `minimize -x, x ≥ 0` decodes and the
+    verifier accepts it — the end-to-end property the old contract
+    could not satisfy (it had no slot for the base point). -/
+def case_unboundedRoundTripsThroughVerifier : IO Unit := do
+  let p : Problem 0 1 :=
+    { c := #v[-1], a := #[], rowBounds := #v[], colBounds := #v[(some 0, none)] }
+  let resp := "{\"status\":\"unbounded\",\"certificate\":{\"primal\":[\"0\"],\"ray\":[\"1\"],\"dual\":null}}"
+  match decodeResponse 0 1 resp with
+  | .ok (.solution sol) =>
+    match LP.Verify.verifyOutcome {} none p sol with
+    | .unbounded .. => pure ()
+    | .unchecked s =>
+      throw (IO.userError s!"verifier left the certificate unchecked: {repr s}")
+    | _ => throw (IO.userError "verifier returned the wrong constructor")
+  | other => throw (IO.userError s!"decode: {repr other}")
+
 def case_decodeInfeasibleHasDualOnly : IO Unit := do
-  let resp := "{\"status\":\"infeasible\",\"certificate\":{\"primal\":null,\"dual\":[\"1\",\"0\"]}}"
+  let resp := "{\"status\":\"infeasible\",\"certificate\":{\"primal\":null,\"dual\":" ++
+    "{\"rowLower\":[\"1\",\"0\"],\"rowUpper\":[\"0\",\"0\"],\"colLower\":[\"0\",\"0\",\"0\"],\"colUpper\":[\"1\",\"0\",\"0\"]}}}"
   match decodeResponse 2 3 resp with
   | .ok (.solution sol) =>
     match sol.status with
@@ -196,13 +223,13 @@ def case_decodeErrorEnvelope : IO Unit := do
   | other => throw (IO.userError s!"expected wireError, got: {repr other}")
 
 def case_decodeLengthMismatchRejected : IO Unit := do
-  let resp := "{\"status\":\"optimal\",\"certificate\":{\"primal\":[\"1\",\"2\"],\"dual\":[\"0\",\"0\"]}}"
+  let resp := "{\"status\":\"optimal\",\"certificate\":{\"primal\":[\"1\",\"2\"],\"dual\":null}}"
   match decodeResponse 2 3 resp with
   | .error _ => pure ()
   | other => throw (IO.userError s!"expected length-mismatch error, got: {repr other}")
 
 def case_decodeMalformedRationalRejected : IO Unit := do
-  let resp := "{\"status\":\"optimal\",\"certificate\":{\"primal\":[\"1.5\",\"0\",\"0\"],\"dual\":[\"0\",\"0\"]}}"
+  let resp := "{\"status\":\"optimal\",\"certificate\":{\"primal\":[\"1.5\",\"0\",\"0\"],\"dual\":null}}"
   match decodeResponse 2 3 resp with
   | .error _ => pure ()
   | other => throw (IO.userError s!"expected malformed-rational error, got: {repr other}")
@@ -253,8 +280,10 @@ def main : IO UInt32 := do
       ("sparseEntriesAreTriples",        case_sparseEntriesAreTriples),
       ("requestIsCanonical",             case_requestIsCanonical),
       ("decodeOptimal",                  case_decodeOptimal),
-      ("decodeSignedDualSplit",          case_decodeSignedDualSplit),
-      ("decodeUnboundedRoutesPrimalToRay", case_decodeUnboundedRoutesPrimalToRay),
+      ("decodeDualMissingFieldRejected", case_decodeDualMissingFieldRejected),
+      ("decodeDualArrayFormRejected",    case_decodeDualArrayFormRejected),
+      ("decodeUnboundedCarriesBaseAndRay", case_decodeUnboundedCarriesBaseAndRay),
+      ("unboundedRoundTripsThroughVerifier", case_unboundedRoundTripsThroughVerifier),
       ("decodeInfeasibleHasDualOnly",    case_decodeInfeasibleHasDualOnly),
       ("decodeErrorEnvelope",            case_decodeErrorEnvelope),
       ("decodeLengthMismatchRejected",   case_decodeLengthMismatchRejected),

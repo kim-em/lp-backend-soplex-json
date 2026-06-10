@@ -22,11 +22,23 @@
   {
     "status": "optimal" | "infeasible" | "unbounded" | "timeLimit" | ...,
     "certificate": {
-      "primal": ["<Rat>", ...] | null,
-      "dual":   ["<Rat>", ...] | null
+      "primal": ["<Rat>", ...] | null,   // feasible point (length = numVars)
+      "ray":    ["<Rat>", ...] | null,   // recession direction (length = numVars)
+      "dual": {                          // the four-vector bundle, or null
+        "rowLower": ["<Rat>", ...],      // length = numConstraints
+        "rowUpper": ["<Rat>", ...],      // length = numConstraints
+        "colLower": ["<Rat>", ...],      // length = numVars
+        "colUpper": ["<Rat>", ...]       // length = numVars
+      } | null
     }
   }
   ```
+
+  The certificate fields mirror `LPCore.Certificate` / `LP.DualBundle`
+  exactly, so everything the pure-Lean verifier can check is
+  expressible on the wire: `optimal` needs `primal` + `dual`,
+  `infeasible` needs `dual`, `unbounded` needs `primal` (a feasible
+  base point) **and** `ray`.
 
   All rational numbers travel as decimal strings (`"3/7"`, `"-1"`),
   *not* as JSON numbers — IEEE 754 floats would round the kernel-
@@ -201,23 +213,23 @@ private def decodeRatVector (j : Json) (k : Nat) (field : String) :
   else
     throw s!"{field}: expected length {k}, got {arr.size}"
 
-/-- Pull the `dual` array (length = `numConstraints`) out of the
-    response and split it into a `DualBundle`. Wire semantics: each
-    entry is a signed row multiplier. We decompose it into the
-    nonneg `rowLower` / `rowUpper` split required by `DualBundle`:
-    a positive entry goes to `rowLower`, a negative entry's
-    absolute value goes to `rowUpper`. Column duals are not on the
-    wire and default to zero. -/
+/-- Decode the four-vector dual bundle: an object with `rowLower` /
+    `rowUpper` (length = `numConstraints`) and `colLower` / `colUpper`
+    (length = `numVars`) arrays of wire rationals — mirroring
+    `LP.DualBundle`. All four fields are required when `dual` is
+    present. The verifier checks nonnegativity and the
+    zero-where-absent rule; the decoder only enforces shape. -/
 private def decodeDualBundle (j : Json) (m n : Nat) :
     Except String (DualBundle m n) := do
-  let row ← decodeRatVector j m "dual"
-  let rowLower : Vector Rat m :=
-    Vector.ofFn fun i => if row[i] ≥ (0 : Rat) then row[i] else 0
-  let rowUpper : Vector Rat m :=
-    Vector.ofFn fun i => if row[i] ≥ (0 : Rat) then 0 else -row[i]
-  let zerosN : Vector Rat n := Vector.ofFn fun _ => (0 : Rat)
-  pure { rowLower := rowLower, rowUpper := rowUpper,
-         colLower := zerosN, colUpper := zerosN }
+  let _ ← j.getObj?
+  let field {k : Nat} (name : String) : Except String (Vector Rat k) := do
+    let v := j.getObjValD name
+    if v.isNull then throw s!"certificate.dual.{name}: missing"
+    decodeRatVector v k s!"certificate.dual.{name}"
+  pure { rowLower := ← field (k := m) "rowLower"
+         rowUpper := ← field (k := m) "rowUpper"
+         colLower := ← field (k := n) "colLower"
+         colUpper := ← field (k := n) "colUpper" }
 
 /-- The recoverable error envelope a binary writes when it cannot
     complete a solve cleanly. Returned by `decodeResponse` so the
@@ -253,19 +265,16 @@ def decodeResponse (m n : Nat) (s : String) :
   let certJ ← j.getObjVal? "certificate"
   let _ ← certJ.getObj? -- reject arrays, strings, etc.
   let primalJ := certJ.getObjValD "primal"
+  let rayJ    := certJ.getObjValD "ray"
   let dualJ   := certJ.getObjValD "dual"
-  -- `unbounded` puts the ray of recession in the wire's `primal` slot;
-  -- every other status puts a feasible point there.
-  let primalRay ← match status, primalJ.isNull with
-    | _, true =>
-      pure (α := Option (Vector Rat n) × Option (Vector Rat n)) (none, none)
-    | .unbounded, false =>
-      let v ← decodeRatVector primalJ n "certificate.primal (ray)"
-      pure (none, some v)
-    | _, false =>
-      let v ← decodeRatVector primalJ n "certificate.primal"
-      pure (some v, none)
-  let (primal, ray) := primalRay
+  -- The three slots mirror `LPCore.Certificate`: `primal` is always a
+  -- feasible point, `ray` the recession direction (unbounded only).
+  let primal ←
+    if primalJ.isNull then pure (α := Option (Vector Rat n)) none
+    else (do pure (some (← decodeRatVector primalJ n "certificate.primal")))
+  let ray ←
+    if rayJ.isNull then pure (α := Option (Vector Rat n)) none
+    else (do pure (some (← decodeRatVector rayJ n "certificate.ray")))
   let dual ←
     if dualJ.isNull then pure (α := Option (DualBundle m n)) none
     else (do let db ← decodeDualBundle dualJ m n; pure (some db))
