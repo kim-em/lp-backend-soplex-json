@@ -19,14 +19,25 @@ jobs:
           curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
             | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-      # SoPlex is a *runtime* dep of this package (the JSON backend
-      # spawns it via IO.Process when invoked), not a build dep. The
-      # build graph here is pure Lean; if anything links GMP, Boost,
-      # or SoPlex we want to know.
+      # SoPlex is a *runtime* dep of this package (the shipped wrapper
+      # spawns the CLI via IO.Process when invoked), not a build dep.
+      # The build graph here is pure Lean; if anything links GMP,
+      # Boost, or SoPlex we want to know.
       - run: lean --version
       - run: lake build
-      # Encoder/decoder round-trip tests. No `soplex` binary required;
-      # an integration test that actually spawns one would need an
-      # extra matrix entry that `apt install soplex` / `brew install
-      # soplex` first.
+      # Install a stock `soplex` CLI so `lake test` exercises the
+      # shipped wrapper (`scripts/soplex-json-wrapper.py`) end-to-end:
+      # the real-wrapper cases solve real LPs and run every certificate
+      # back through the verifier. The macOS entry is the guaranteed
+      # real-coverage one (brew ships a `soplex`); on Linux there is no
+      # reliable apt package, so we try best-effort and the cases
+      # self-skip if it is absent (the `lake test` log shows which).
+      - name: Install soplex (macOS)
+        if: runner.os == 'macOS'
+        run: brew install soplex
+      - name: Install soplex (Linux, best-effort)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y soplex || true
+      - name: Report soplex availability
+        run: soplex --version || echo "soplex not available; real-wrapper cases will self-skip"
       - run: lake test
