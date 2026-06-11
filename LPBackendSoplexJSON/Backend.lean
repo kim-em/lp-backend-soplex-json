@@ -1,10 +1,21 @@
 /-
   Out-of-process SoPlex backend.
 
-  Drives an external `soplex` binary on `$PATH` (or a user-supplied
-  absolute path via env var `LP_BACKEND_SOPLEX_JSON_BIN`) through a
-  JSON stdio protocol — see `Contract.lean` and
-  `docs/json-contract.md`.
+  Drives a contract-speaking binary through a JSON stdio protocol —
+  see `Contract.lean` and `docs/json-contract.md`. The binary is
+  resolved in priority order:
+
+  1. `$LP_BACKEND_SOPLEX_JSON_BIN`, if set — the override for custom
+     wrappers (a HiGHS harness, a Rust shim, etc.);
+  2. otherwise the wrapper shipped in this package
+     (`scripts/soplex-json-wrapper.py`), which drives a stock `soplex`
+     CLI underneath. So `brew install soplex` + `import
+     LPBackendSoplexJSON` gives a working `by lp` with no further
+     configuration.
+
+  The shipped wrapper is embedded at build time with `include_str`
+  and materialized to a temp file at runtime, so resolution does not
+  depend on where the package was checked out.
 
   Self-registers under priority 50 ("subprocess band") on import:
   any consumer who `import LPBackendSoplexJSON` gets this in their
@@ -26,13 +37,64 @@ namespace LP.Backend.SoplexJSON
 
 open LP
 
-/-- Resolve the SoPlex binary location. Honors
-    `LP_BACKEND_SOPLEX_JSON_BIN` so users on a non-standard layout
-    don't have to symlink. -/
+/-- The contract-speaking SoPlex wrapper, embedded at build time. It
+    drives a stock `soplex` CLI underneath; see
+    `scripts/soplex-json-wrapper.py`. -/
+def bundledWrapperSource : String := include_str "../scripts/soplex-json-wrapper.py"
+
+/-- The directory the bundled wrapper is materialized into. We prefer a
+    user-private cache directory (`$XDG_CACHE_HOME`, then `$HOME/.cache`)
+    over a shared system temp dir, so the materialized path is not a
+    predictable location another local user could pre-seed. Falls back to
+    `$TMPDIR` / `$TMP` / `/tmp` only when no home is available. -/
+def wrapperCacheDir : IO System.FilePath := do
+  let fromEnv (names : List String) : IO (Option System.FilePath) := do
+    for name in names do
+      if let some v ← IO.getEnv name then
+        if !v.isEmpty then return some (System.FilePath.mk v)
+    return none
+  match ← fromEnv ["XDG_CACHE_HOME"] with
+  | some c => return c / "lp-backend-soplex-json"
+  | none =>
+    match ← fromEnv ["HOME"] with
+    | some h => return h / ".cache" / "lp-backend-soplex-json"
+    | none =>
+      let base := (← fromEnv ["TMPDIR", "TMP"]).getD (System.FilePath.mk "/tmp")
+      return base / "lp-backend-soplex-json"
+
+/-- Materialize the embedded wrapper to a content-addressed path and
+    return it, ready to spawn. Idempotent: the filename embeds a hash
+    of the source, so a present file is reused and a bumped wrapper
+    never collides with a stale one. The script is written to a unique
+    temp name and `rename`d into place, so a concurrent solve never
+    observes a half-written file. -/
+def bundledWrapperPath : IO String := do
+  let dir ← wrapperCacheDir
+  IO.FS.createDirAll dir
+  let name := s!"soplex-json-wrapper-{bundledWrapperSource.hash}.py"
+  let path := dir / name
+  unless ← path.pathExists do
+    let tmp := dir / s!"{name}.{(← IO.monoNanosNow)}.tmp"
+    IO.FS.writeFile tmp bundledWrapperSource
+    -- `chmod +x` so the `#!/usr/bin/env python3` shebang routes it.
+    let chmod ← IO.Process.output { cmd := "chmod", args := #["+x", tmp.toString] }
+    if chmod.exitCode ≠ 0 then
+      throw (IO.userError s!"soplex-json: chmod failed on {tmp}: {chmod.stderr}")
+    IO.FS.rename tmp path
+  return path.toString
+
+/-- Resolve the contract-speaking binary. `LP_BACKEND_SOPLEX_JSON_BIN`
+    overrides everything (point it at a custom wrapper); otherwise the
+    bundled wrapper is materialized and used. On Windows the bundled
+    script cannot be marked executable, so we fall back to a bare
+    `soplex` on `$PATH` — which does not speak the contract, so the
+    probe reports it unavailable until the user sets the override. -/
 def soplexBinary : IO String := do
   match (← IO.getEnv "LP_BACKEND_SOPLEX_JSON_BIN") with
   | some path => return path
-  | none      => return "soplex"
+  | none      =>
+    if System.Platform.isWindows then return "soplex"
+    else bundledWrapperPath
 
 /-- Run the SoPlex binary on a JSON-encoded `(opts, p)`, decode the
     response into a `Solution`.

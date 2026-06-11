@@ -14,12 +14,16 @@ The Lean side runs the binary as
 $LP_BACKEND_SOPLEX_JSON_BIN [--solve --json]
 ```
 
-(falling back to `soplex` on `$PATH` if the env var is unset), then
-writes the request to stdin and reads the response from stdout.
-The registry probe uses the same path: it sends the trivial request
-`minimize x, x ≥ 0` (one variable, no rows) and requires a decodable
-response, so a binary that does not speak this contract is reported
-as unavailable before any real solve is attempted.
+If the env var is unset, it falls back to the wrapper shipped in
+this repository (`scripts/soplex-json-wrapper.py`), which drives a
+stock `soplex` CLI underneath. The env var stays the override for a
+custom wrapper (a HiGHS harness, a Rust shim, etc.). Either way the
+Lean side then writes the request to stdin and reads the response
+from stdout. The registry probe uses the same path: it sends the
+trivial request `minimize x, x ≥ 0` (one variable, no rows) and
+requires a decodable response, so a binary that does not speak this
+contract is reported as unavailable before any real solve is
+attempted.
 
 Stderr is captured and surfaced through `SolveError.bridge` on
 non-zero exit. The Lean side closes stdin after writing the

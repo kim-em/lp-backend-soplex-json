@@ -14,9 +14,17 @@
     * the request bytes the binary sees match `encodeRequest`.
 
   Unix-only (uses `sh` and `chmod`). Skipped on Windows.
+
+  The final block drives the *real* shipped wrapper
+  (`scripts/soplex-json-wrapper.py`) against an installed `soplex`,
+  and runs every certificate it produces back through the Lean
+  verifier (`verifyOutcome`) — the same end-to-end conformance the
+  registry probe checks. These cases are skipped when no `soplex` is
+  on `$PATH`; CI installs one so they run.
 -/
 
 import LPCore
+import LPVerify
 import LPBackendSoplexJSON.Backend
 import LPBackendSoplexJSON.Contract
 
@@ -182,11 +190,147 @@ def case_probeRejectsNonContractBinary : IO Unit := withTempDir fun dir => do
   | .error _ => pure ()
   | .ok () => throw (IO.userError "probe accepted a non-contract binary")
 
+/-! ## Real-wrapper integration tests.
+
+    These drive the shipped `scripts/soplex-json-wrapper.py` against an
+    installed `soplex`, then run the certificate it returns back
+    through the verifier. They are skipped when `soplex` is absent. -/
+
+/-- Is a stock `soplex` CLI on `$PATH`? (`--version` exits 0; a spawn
+    failure means it is not installed.) -/
+private def soplexAvailable : IO Bool := do
+  try
+    let out ← IO.Process.output { cmd := "soplex", args := #["--version"] }
+    return out.exitCode == 0
+  catch _ => return false
+
+/-- Solve `p` (sense from `opts`) through the bundled wrapper and assert
+    the verifier accepts the certificate via the `expected` constructor
+    check on the resulting `Verified` value. -/
+private def verifyVia {m n : Nat} (opts : Options) (p : Problem m n)
+    (label : String) (expected : LP.Verify.Verified p opts.sense → Bool) :
+    IO Unit := do
+  let bin ← bundledWrapperPath
+  match (← solveExactWith bin opts p) with
+  | .error e => throw (IO.userError s!"{label}: wrapper error: {repr e}")
+  | .ok sol =>
+    let v := LP.Verify.verifyOutcome opts none p sol
+    unless expected v do
+      throw (IO.userError s!"{label}: verifier rejected the wrapper certificate \
+                             (status {repr sol.status})")
+
+/-- `minimize x₀` s.t. `x₀ ≥ 3` and `x₀ ≥ 0`: optimum `x₀ = 3`. -/
+private def optProblem : Problem 1 1 :=
+  { c := ⟨#[(1 : Rat)], rfl⟩,
+    a := #[ Problem.entry 0 0 (1 : Rat) ],
+    rowBounds := ⟨#[ (some (3 : Rat), none) ], rfl⟩,
+    colBounds := ⟨#[ (some (0 : Rat), none) ], rfl⟩ }
+
+/-- `x₀ ≤ -1` with `x₀ ≥ 0`: infeasible (Farkas certificate). -/
+private def infProblem : Problem 1 1 :=
+  { c := ⟨#[(1 : Rat)], rfl⟩,
+    a := #[ Problem.entry 0 0 (1 : Rat) ],
+    rowBounds := ⟨#[ (none, some (-1 : Rat)) ], rfl⟩,
+    colBounds := ⟨#[ (some (0 : Rat), none) ], rfl⟩ }
+
+/-- `minimize -x₀` s.t. `x₀ ≥ 0`: unbounded below (base point + ray). -/
+private def unbProblem : Problem 0 1 :=
+  { c := ⟨#[(-1 : Rat)], rfl⟩,
+    a := #[],
+    rowBounds := ⟨#[], rfl⟩,
+    colBounds := ⟨#[ (some (0 : Rat), none) ], rfl⟩ }
+
+/-- `maximize x₀` s.t. `0 ≤ x₀ ≤ 5`: optimum `x₀ = 5`. Exercises the
+    sense-canonicalization path (the wrapper negates the objective). -/
+private def maxProblem : Problem 0 1 :=
+  { c := ⟨#[(1 : Rat)], rfl⟩,
+    a := #[],
+    rowBounds := ⟨#[], rfl⟩,
+    colBounds := ⟨#[ (some (0 : Rat), some (5 : Rat)) ], rfl⟩ }
+
+/-- `minimize x₀ + (3/7)·x₁` s.t. `(2/7)·x₀ ≥ 5/11`, both `≥ 0`:
+    a fractional optimum that catches any float detour end-to-end. -/
+private def fracProblem : Problem 1 2 :=
+  { c := ⟨#[(1 : Rat), mkRat 3 7], rfl⟩,
+    a := #[ Problem.entry 0 0 (mkRat 2 7) ],
+    rowBounds := ⟨#[ (some (mkRat 5 11), none) ], rfl⟩,
+    colBounds := ⟨#[ (some (0 : Rat), none), (some (0 : Rat), none) ], rfl⟩ }
+
+/-- `minimize x₀ + x₁` s.t. `x₀ + x₁ = 4`, `x₀ ≥ 0`, `x₁` free:
+    exercises the equality-row (`=`) and free-variable (`x free`)
+    emission branches. -/
+private def eqFreeProblem : Problem 1 2 :=
+  { c := ⟨#[(1 : Rat), (1 : Rat)], rfl⟩,
+    a := #[ Problem.entry 0 0 (1 : Rat), Problem.entry 0 1 (1 : Rat) ],
+    rowBounds := ⟨#[ (some (4 : Rat), some (4 : Rat)) ], rfl⟩,
+    colBounds := ⟨#[ (some (0 : Rat), none), (none, none) ], rfl⟩ }
+
+/-- `minimize x₀ + x₁` s.t. `x₀ + x₁ ≥ -5`, `-3 ≤ x₀ ≤ 4`, `x₁ ≤ 2`:
+    exercises the negative-lower-bound and `-infinity ≤ x ≤ hi`
+    emission branches. -/
+private def negBoundProblem : Problem 1 2 :=
+  { c := ⟨#[(1 : Rat), (1 : Rat)], rfl⟩,
+    a := #[ Problem.entry 0 0 (1 : Rat), Problem.entry 0 1 (1 : Rat) ],
+    rowBounds := ⟨#[ (some (-5 : Rat), none) ], rfl⟩,
+    colBounds := ⟨#[ (some (-3 : Rat), some (4 : Rat)), (none, some (2 : Rat)) ], rfl⟩ }
+
+def case_realOptimalVerifies : IO Unit :=
+  verifyVia {} optProblem "realOptimal" fun
+    | .optimal .. => true
+    | _ => false
+
+def case_realProbeVerifies : IO Unit :=
+  -- The 0×1 probe LP itself, end-to-end through the verifier.
+  let probeP : Problem 0 1 :=
+    { c := #v[1], a := #[], rowBounds := #v[], colBounds := #v[(some 0, none)] }
+  verifyVia {} probeP "realProbe" fun
+    | .optimal .. => true
+    | _ => false
+
+def case_realInfeasibleVerifies : IO Unit :=
+  verifyVia {} infProblem "realInfeasible" fun
+    | .infeasible .. => true
+    | _ => false
+
+def case_realUnboundedVerifies : IO Unit :=
+  verifyVia {} unbProblem "realUnbounded" fun
+    | .unbounded .. => true
+    | _ => false
+
+def case_realMaximizeVerifies : IO Unit :=
+  verifyVia { sense := .maximize } maxProblem "realMaximize" fun
+    | .optimal .. => true
+    | _ => false
+
+def case_realFractionalVerifies : IO Unit :=
+  verifyVia {} fracProblem "realFractional" fun
+    | .optimal .. => true
+    | _ => false
+
+def case_realEqFreeVerifies : IO Unit :=
+  verifyVia {} eqFreeProblem "realEqFree" fun
+    | .optimal .. => true
+    | _ => false
+
+def case_realNegBoundVerifies : IO Unit :=
+  verifyVia {} negBoundProblem "realNegBound" fun
+    | .optimal .. => true
+    | _ => false
+
+/-- The shipped probe (`probe`) succeeds out of the box: with no env
+    override set, it resolves the bundled wrapper and the trivial solve
+    round-trips. -/
+def case_shippedProbeSucceeds : IO Unit := do
+  -- Clear any override so we exercise the bundled-wrapper fallback.
+  match ← probeWith (← bundledWrapperPath) with
+  | .ok () => pure ()
+  | .error e => throw (IO.userError s!"shipped wrapper failed its own probe: {e}")
+
 def main : IO UInt32 := do
   if System.Platform.isWindows then
     IO.println "  [subprocess] skipped on Windows (uses sh/chmod)"
     return 0
-  let cases : List (String × IO Unit) :=
+  let shimCases : List (String × IO Unit) :=
     [ ("happyPath",                     case_happyPath),
       ("stdinReceivesEncodedRequest",   case_stdinReceivesEncodedRequest),
       ("nonZeroExitSurfacesStderr",     case_nonZeroExitSurfacesStderr),
@@ -196,6 +340,20 @@ def main : IO UInt32 := do
       ("errorEnvelopeOnZeroExit",       case_errorEnvelopeOnZeroExit),
       ("probeAcceptsContractSpeaker",   case_probeAcceptsContractSpeaker),
       ("probeRejectsNonContractBinary", case_probeRejectsNonContractBinary) ]
+  let realCases : List (String × IO Unit) :=
+    [ ("realProbeVerifies",             case_realProbeVerifies),
+      ("shippedProbeSucceeds",          case_shippedProbeSucceeds),
+      ("realOptimalVerifies",           case_realOptimalVerifies),
+      ("realFractionalVerifies",        case_realFractionalVerifies),
+      ("realEqFreeVerifies",            case_realEqFreeVerifies),
+      ("realNegBoundVerifies",          case_realNegBoundVerifies),
+      ("realInfeasibleVerifies",        case_realInfeasibleVerifies),
+      ("realUnboundedVerifies",         case_realUnboundedVerifies),
+      ("realMaximizeVerifies",          case_realMaximizeVerifies) ]
+  let avail ← soplexAvailable
+  unless avail do
+    IO.println "  [subprocess] soplex not on PATH; skipping real-wrapper cases"
+  let cases := if avail then shimCases ++ realCases else shimCases
   let mut failures := 0
   for (name, action) in cases do
     IO.print s!"  [subprocess] {name} ... "
