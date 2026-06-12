@@ -23,7 +23,7 @@ require LPCore from git "https://github.com/leanprover/lp-core" @
   "96d003f40ada9c730ae9fe100716214273be651b"
 
 require LPTactic from git "https://github.com/leanprover/lp-tactic" @
-  "c535b70255f4ba6b9a6d93da82420978f931586e"
+  "15a109ea582487ab6cb26fb74b7685d1349f4999"
 
 package LPBackendSoplexJSON
 
