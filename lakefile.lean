@@ -20,10 +20,10 @@ open Lake DSL
 -/
 
 require LPCore from git "https://github.com/leanprover/lp-core" @
-  "96d003f40ada9c730ae9fe100716214273be651b"
+  "46c14aba1b4f3c5f7d865e187119a72775bee81b"
 
 require LPTactic from git "https://github.com/leanprover/lp-tactic" @
-  "15a109ea582487ab6cb26fb74b7685d1349f4999"
+  "5d71198eee10c843ad6d22e63dd011e0851de58d"
 
 package LPBackendSoplexJSON
 
